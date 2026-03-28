@@ -141,6 +141,11 @@ func NewServer(cfg *Config) *Server {
 	}
 	opts = append(opts, adt.WithSafety(safety))
 
+	// Use stateless sessions by default. Stateful sessions cause sap-contextid
+	// cookies to leak across ADT endpoints, resulting in "Session not found" errors
+	// on systems with aggressive ICF session management (e.g., EDZ).
+	opts = append(opts, adt.WithSessionType(adt.SessionStateless))
+
 	adtClient := adt.NewClient(cfg.BaseURL, cfg.Username, cfg.Password, opts...)
 
 	// Set terminal ID for debugger operations

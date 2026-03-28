@@ -215,8 +215,6 @@ func WithTerminalID(terminalID string) Option {
 
 // NewHTTPClient creates an http.Client configured for the given Config.
 func (c *Config) NewHTTPClient() *http.Client {
-	jar, _ := cookiejar.New(nil)
-
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment, // Honor HTTP_PROXY/HTTPS_PROXY env vars
 		TLSClientConfig: &tls.Config{
@@ -224,9 +222,16 @@ func (c *Config) NewHTTPClient() *http.Client {
 		},
 	}
 
-	return &http.Client{
-		Jar:       jar,
+	client := &http.Client{
 		Transport: transport,
 		Timeout:   c.Timeout,
 	}
+
+	// Always use cookie jar — needed for CSRF token correlation (sap-XSRF cookie)
+	// and MYSAPSSO2 session continuity between CSRF fetch and data request.
+	// The X-sap-adt-sessiontype header controls whether sap-contextid is issued.
+	jar, _ := cookiejar.New(nil)
+	client.Jar = jar
+
+	return client
 }

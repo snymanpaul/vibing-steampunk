@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"sync"
@@ -166,6 +167,12 @@ func (t *Transport) Request(ctx context.Context, path string, opts *RequestOptio
 			// Clear cached CSRF token and session ID
 			t.setCSRFToken("")
 			t.setSessionID("")
+			// Clear stale cookies by replacing the cookie jar (but keep the
+			// same http.Client and Transport to preserve TCP connections)
+			if client, ok := t.httpClient.(*http.Client); ok {
+				jar, _ := cookiejar.New(nil)
+				client.Jar = jar
+			}
 			// Fetch new CSRF token (this establishes a new session)
 			if err := t.fetchCSRFToken(ctx); err != nil {
 				return nil, fmt.Errorf("refreshing session after timeout: %w", err)
@@ -180,6 +187,10 @@ func (t *Transport) Request(ctx context.Context, path string, opts *RequestOptio
 		if resp.StatusCode == http.StatusUnauthorized {
 			t.setCSRFToken("")
 			t.setSessionID("")
+			if client, ok := t.httpClient.(*http.Client); ok {
+				jar, _ := cookiejar.New(nil)
+				client.Jar = jar
+			}
 			if err := t.fetchCSRFToken(ctx); err != nil {
 				// Return both errors: re-auth failure wraps the original 401 context
 				// so callers can see which endpoint triggered the expiry.
@@ -367,11 +378,15 @@ func (t *Transport) setDefaultHeaders(req *http.Request, opts *RequestOptions) {
 		req.Header.Set(k, v)
 	}
 
-	// Set session header based on session type
+	// Set session header based on session type.
+	// Default to stateless to prevent sap-contextid cross-endpoint conflicts.
+	// When no session type is configured, SAP ICF may return sap-contextid from
+	// one endpoint (e.g., /core/discovery) which then causes "Session not found"
+	// errors when sent to a different endpoint (e.g., /datapreview/freestyle).
 	switch t.config.SessionType {
 	case SessionStateful:
 		req.Header.Set("X-sap-adt-sessiontype", "stateful")
-	case SessionStateless:
+	default:
 		req.Header.Set("X-sap-adt-sessiontype", "stateless")
 	}
 }
@@ -447,7 +462,8 @@ func (e *APIError) IsSessionExpired() bool {
 	msg := strings.ToLower(e.Message)
 	return strings.Contains(msg, "icmenosession") ||
 		strings.Contains(msg, "session timed out") ||
-		strings.Contains(msg, "session no longer exists")
+		strings.Contains(msg, "session no longer exists") ||
+		strings.Contains(msg, "session not found")
 }
 
 // IsNotFoundError checks if an error is an API 404 Not Found error.
